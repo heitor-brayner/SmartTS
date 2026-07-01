@@ -4,6 +4,7 @@ module SmartTS.TypeCheck
   ( typeCheckContract
   ) where
 
+import Control.Monad (when, unless, zipWithM_)
 import Control.Monad.State
 import Data.List (nub)
 import qualified Data.Map.Strict as M
@@ -24,10 +25,12 @@ data TcBinding = TcBinding
   deriving (Eq, Show)
 
 data TcEnv = TcEnv
-  { envStorageType :: Type
-  , envBindings :: M.Map Name TcBinding
+  { envStorageType        :: Type
+  , envBindings           :: M.Map Name TcBinding
   , envFunctionSignatures :: M.Map Name Signature
-  , envReturnType :: Type
+  , envReturnType         :: Type
+  , envEnumDefs           :: M.Map Name [Name]
+  , envVariantEnum        :: M.Map Name Name
   }
   deriving (Eq, Show)
 
@@ -44,15 +47,37 @@ withSavedEnv action = do
   put saved
   return r
 
+buildEnumMaps :: [EnumDecl] -> (M.Map Name [Name], M.Map Name Name)
+buildEnumMaps decls =
+  ( M.fromList [(enumName d, enumVariants d) | d <- decls]
+  , M.fromList [(v, enumName d) | d <- decls, v <- enumVariants d]
+  )
+
+checkEnumRefs :: M.Map Name [Name] -> Type -> Either String ()
+checkEnumRefs env = go
+  where
+    go (TEnum n)     = if M.member n env then Right ()
+                       else Left $ "Reference to undeclared enum type `" ++ n ++ "`."
+    go (TPair t1 t2) = go t1 >> go t2
+    go (TRecord fs)  = mapM_ (go . snd) fs
+    go _             = Right ()
+
 -- | Type-check a parsed contract and return a typed contract on success.
 typeCheckContract :: ParsedContract -> Either String TypedContract
 typeCheckContract c = do
   checkDuplicateStorage (contractStorage c)
   mapM_ (checkDuplicateParams . methodArgs) (contractMethods c)
-  typedMethods <- mapM (checkMethod c) (contractMethods c)
+  let (enumDefs, variantMap) = buildEnumMaps (contractEnums c)
+  mapM_ (checkEnumRefs enumDefs . snd) (contractStorage c)
+  mapM_ (\m -> do
+      mapM_ (checkEnumRefs enumDefs) [t | FormalParameter _ t <- methodArgs m]
+      checkEnumRefs enumDefs (methodReturnType m)
+    ) (contractMethods c)
+  typedMethods <- mapM (checkMethod c enumDefs variantMap) (contractMethods c)
   return $ Contract
     { contractName    = contractName c
     , contractStorage = contractStorage c
+    , contractEnums   = contractEnums c
     , contractMethods = typedMethods
     }
 
@@ -81,8 +106,8 @@ buildSigMap c =
     , methodKind m == Private
     ]
 
-checkMethod :: Contract a -> MethodDecl () -> Either String (MethodDecl Type)
-checkMethod c m =
+checkMethod :: Contract a -> M.Map Name [Name] -> M.Map Name Name -> MethodDecl () -> Either String (MethodDecl Type)
+checkMethod c enumDefs variantMap m =
   let storageT = TRecord (contractStorage c)
       paramMap =
         M.fromList
@@ -91,10 +116,12 @@ checkMethod c m =
           ]
       env0 =
         TcEnv
-          { envStorageType = storageT
-          , envBindings = paramMap
+          { envStorageType        = storageT
+          , envBindings           = paramMap
           , envFunctionSignatures = buildSigMap c
-          , envReturnType = methodReturnType m
+          , envReturnType         = methodReturnType m
+          , envEnumDefs           = enumDefs
+          , envVariantEnum        = variantMap
           }
    in case runStateT (checkStmt (methodBody m)) env0 of
         Left err -> Left err
@@ -145,6 +172,48 @@ checkStmt (WhileStmt cond body) = do
   lift $ expectType "while condition" (exprAnn tc) TBool
   tbody <- withSavedEnv (checkStmt body)
   return (WhileStmt tc tbody)
+checkStmt (MatchStmt e cases) = do
+  te <- inferExpr e
+  case exprAnn te of
+    TEnum eName -> do
+      env <- get
+      let variants = maybe [] id (M.lookup eName (envEnumDefs env))
+          covered  = map fst cases
+          missing  = filter (`notElem` covered) variants
+          unknown  = filter (`notElem` variants) covered
+      unless (null missing) $
+        tcError $ "Non-exhaustive match on `" ++ eName ++ "`: missing " ++ show missing ++ "."
+      unless (length covered == length (nub covered)) $
+        tcError "Duplicate variant in match arms."
+      unless (null unknown) $
+        tcError $ "Unknown variant(s) in match: " ++ show unknown ++ "."
+      tcases <- mapM (\(v, s) -> (,) v <$> withSavedEnv (checkStmt s)) cases
+      return (MatchStmt te tcases)
+    t -> tcError $ "match requires an enum expression, got " ++ prettyType t ++ "."
+checkStmt (VarDestructStmt n1 n2 annType e) = do
+  when (n1 == n2) $ tcError "Destructuring variables must have different names."
+  noDuplicateLocal n1
+  noDuplicateLocal n2
+  te <- inferExpr e
+  lift $ expectType ("var (" ++ n1 ++ ", " ++ n2 ++ ") destructuring") (exprAnn te) annType
+  case annType of
+    TPair t1 t2 -> do
+      modify $ insertLocal n1 LocalMutable t1
+      modify $ insertLocal n2 LocalMutable t2
+      return (VarDestructStmt n1 n2 annType te)
+    _ -> tcError "var destructuring requires a pair<T, U> type annotation."
+checkStmt (ValDestructStmt n1 n2 annType e) = do
+  when (n1 == n2) $ tcError "Destructuring variables must have different names."
+  noDuplicateLocal n1
+  noDuplicateLocal n2
+  te <- inferExpr e
+  lift $ expectType ("val (" ++ n1 ++ ", " ++ n2 ++ ") destructuring") (exprAnn te) annType
+  case annType of
+    TPair t1 t2 -> do
+      modify $ insertLocal n1 LocalImmutable t1
+      modify $ insertLocal n2 LocalImmutable t2
+      return (ValDestructStmt n1 n2 annType te)
+    _ -> tcError "val destructuring requires a pair<T, U> type annotation."
 
 noDuplicateLocal :: Name -> TcM ()
 noDuplicateLocal n = do
@@ -254,6 +323,26 @@ inferExpr (Call () name args) = do
         targs
         expected
       return (Call (returnType sig) name targs)
+inferExpr (PairExpr () e1 e2) = do
+  te1 <- inferExpr e1
+  te2 <- inferExpr e2
+  let ty = TPair (exprAnn te1) (exprAnn te2)
+  return (PairExpr ty te1 te2)
+inferExpr (Fst () e) = do
+  te <- inferExpr e
+  case exprAnn te of
+    TPair t1 _ -> return (Fst t1 te)
+    t -> tcError $ "fst requires pair<T, U>, got " ++ prettyType t ++ "."
+inferExpr (Snd () e) = do
+  te <- inferExpr e
+  case exprAnn te of
+    TPair _ t2 -> return (Snd t2 te)
+    t -> tcError $ "snd requires pair<T, U>, got " ++ prettyType t ++ "."
+inferExpr (EnumLiteral () variant) = do
+  env <- get
+  case M.lookup variant (envVariantEnum env) of
+    Nothing    -> tcError $ "Unknown enum variant `" ++ variant ++ "`."
+    Just eName -> return (EnumLiteral (TEnum eName) variant)
 
 inferBoolBin :: (Expr Type -> Expr Type -> Expr Type) -> Expr () -> Expr () -> TcM (Expr Type)
 inferBoolBin con a b = do
@@ -308,6 +397,8 @@ typesEqual TUnit TUnit = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
     fieldEq (n1, t1) (n2, t2) = n1 == n2 && typesEqual t1 t2
+typesEqual (TPair t1 t2) (TPair s1 s2) = typesEqual t1 s1 && typesEqual t2 s2
+typesEqual (TEnum n)     (TEnum m)     = n == m
 typesEqual _ _ = False
 
 prettyType :: Type -> String
@@ -322,3 +413,5 @@ prettyType (TRecord fs) =
       , let lastI = length fs - 1
       ]
     ++ "}"
+prettyType (TPair t1 t2) = "pair<" ++ prettyType t1 ++ ", " ++ prettyType t2 ++ ">"
+prettyType (TEnum n)     = n
