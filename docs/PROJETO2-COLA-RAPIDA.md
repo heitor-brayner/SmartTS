@@ -10,7 +10,7 @@
 > checker mantém um registro de enums separado dos bindings e garante tipos e
 > exaustividade. O interpretador executa os novos nós; o codec valida JSON
 > contra o registro nominal. No LLTZ, pair vira `TTuple`/`Proj` e enum vira
-> `TOr`/`Inj`/`Match`. São 108 testes passando. A branch termina no LLTZ, não
+> `TOr`/`Inj`/`Match`. São 117 testes passando. A branch termina no LLTZ, não
 > em Michelson final.
 
 ## Regras de tipo essenciais
@@ -156,7 +156,7 @@ cabal test all --test-show-details=direct
 
 ```text
 GHC 9.10.3
-All 108 tests passed
+All 117 tests passed
 ```
 
 ## Limitações que devem ser admitidas

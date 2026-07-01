@@ -4,7 +4,7 @@
 **Disciplina:** SmartTS — Linguagem para Contratos Inteligentes Tezos  
 **Data:** 01/07/2026  
 **Branch:** `feature/pair-enum-lltz`  
-**Status:** ✅ Todos os 108 testes passam com GHC 9.10.3
+**Status:** ✅ Todos os 117 testes passam com GHC 9.10.3
 
 ---
 
@@ -82,7 +82,7 @@ O LLTZ IR já fornece exatamente esse construtor:
 | `lib/SmartTS/Interpreter/Eval.hs` | Avaliação dos novos nós de expressão e statement |
 | `lib/SmartTS/Interpreter/Codec.hs` | Codificação/decodificação JSON para pares e enums |
 | `lib/SmartTS/CodeGen/CompileLLTZ.hs` | Tradução pair→TTuple/Proj, enum→TOr/Inj/Match |
-| `test/Main.hs` | Correção de todos os padrões `Contract`, 37 novos testes |
+| `test/Main.hs` | Correção de todos os padrões `Contract`, 59 novos testes |
 | `smart-ts.cabal` | Adição de `containers >= 0.6` nas dependências de teste |
 
 ---
@@ -664,7 +664,7 @@ Contract _ storage _  →  Contract _ storage _ _
 - Desestruturação `var (a, b): pair<int, bool> = p;`
 - Desestruturação `val (a, b): pair<int, bool> = p;`
 
-**Type checking de pares e enums (19 testes):**
+**Type checking de pares e enums (21 testes):**
 - Par bem-tipado ✅
 - `fst` retorna o tipo correto ✅
 - `snd` retorna o tipo correto ✅
@@ -684,6 +684,8 @@ Contract _ storage _  →  Contract _ storage _ _
 - Colisão global de variantes ❌
 - Enum com menos de duas variantes ❌
 - Variante iniciada por minúscula ❌
+- Variante duplicada em cases do `match` ❌
+- Mesmo nome nos dois bindings da desestruturação ❌
 
 **Codec JSON (6 testes incluindo o existente):**
 - Par codifica para `{"fst": ..., "snd": ...}`
@@ -692,14 +694,18 @@ Contract _ storage _  →  Contract _ storage _ _
 - Enum decodifica de string
 - Variante externa inexistente é rejeitada
 
-**Interpretador de pares e enums (5 testes):**
+**Interpretador de pares e enums (9 testes):**
 - Projeção `fst` sobre par no storage
 - Desestruturação `val`
 - Dispatch correto do `match`
 - Igualdade estrutural de pares
 - Igualdade nominal de enums
+- Projeção `snd` em runtime
+- Desestruturação `var` com mutação dos bindings
+- Execução do sample `TrafficLight.smartts`
+- Fluxo de votação e fechamento do sample `VotingBox.smartts`
 
-**Geração de código LLTZ (10 testes):**
+**Geração de código LLTZ (13 testes):**
 - `pair<int, bool>` → `TTuple (RowNode [RowLeaf Nothing TInt, RowLeaf Nothing TBool])`
 - `TEnum "Color"` → `TOr (RowNode [RowLeaf (Label "Red") TUnit, RowLeaf (Label "Green") TUnit])`
 - Par aninhado → TTuple aninhado
@@ -710,6 +716,9 @@ Contract _ storage _  →  Contract _ storage _ _
 - Injeção `Inj`
 - Reordenação de branches do `Match`
 - Preservação da ordem no registro de enums
+- Injeção na terceira posição de enum com três variantes
+- Reordenação de match com três variantes
+- Rejeição de branches com tipos de resultado incompatíveis
 
 ---
 
@@ -899,7 +908,7 @@ LLTZ:
 ## 8. Resultado dos Testes
 
 ```
-All 108 tests passed (0.02s)
+All 117 tests passed (0.02s)
 ```
 
 | Grupo de testes | Quantidade | Status |
@@ -908,11 +917,11 @@ All 108 tests passed (0.02s)
 | Parser — novos: pares e tipos pair | 5 | ✅ |
 | Parser — novos: enums, match, desestruturação | 6 | ✅ |
 | Type Checker — testes existentes | 8 | ✅ |
-| Type Checker — novos: pares e enums | 19 | ✅ |
+| Type Checker — novos: pares e enums | 21 | ✅ |
 | Codec JSON | 6 | ✅ |
-| Interpretador — pares e enums | 5 | ✅ |
-| Geração de código LLTZ | 10 | ✅ |
-| **Total** | **108 testes** | ✅ |
+| Interpretador — pares e enums | 9 | ✅ |
+| Geração de código LLTZ | 13 | ✅ |
+| **Total** | **117 testes** | ✅ |
 
 ---
 

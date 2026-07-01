@@ -551,7 +551,7 @@ o formato correto e ainda ser montada ou embalada incorretamente depois.
 
 ```text
 GHC 9.10.3
-All 108 tests passed
+All 117 tests passed
 ```
 
 Comando recomendado no PowerShell:

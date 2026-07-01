@@ -355,7 +355,7 @@ branch correspondente precisam concordar sobre o mesmo índice.
 **Resposta esperada**
 
 A suíte possui testes do checker, codec, execução end-to-end por
-originate/call e estrutura LLTZ. São 108 testes passando com GHC 9.10.3.
+originate/call e estrutura LLTZ. São 117 testes passando com GHC 9.10.3.
 
 ### 35. Que casos negativos foram testados?
 
@@ -451,7 +451,7 @@ Cada integrante deve conseguir, sem consultar o código:
 > exaustividade e invariantes de enum, o interpretador executa construção,
 > projeção, desestruturação e match, e o codec valida valores externos contra o
 > registro nominal. No LLTZ, pair vira `TTuple`/`Proj` e enum vira
-> `TOr`/`Inj`/`Match`. A suíte possui 108 testes passando. A branch não deve ser
+> `TOr`/`Inj`/`Match`. A suíte possui 117 testes passando. A branch não deve ser
 > apresentada como backend Michelson completo: ela termina no IR LLTZ.
 
 ## Referências para revisão

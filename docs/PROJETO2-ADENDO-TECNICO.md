@@ -189,7 +189,7 @@ cabal test all --test-show-details=direct
 Resultado atual:
 
 ```text
-All 108 tests passed
+All 117 tests passed
 Test suite smart-ts-test: PASS
 ```
 

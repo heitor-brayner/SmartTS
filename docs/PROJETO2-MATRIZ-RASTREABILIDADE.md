@@ -36,8 +36,8 @@ Abreviações:
 | Exaustividade | cases no `MatchStmt` | calcula ausentes/desconhecidos/duplicados | branches completos | `exhaustive match`; `non-exhaustive match fails` | Completo |
 | Registro separado | `contractEnums` | `envEnumDefs`, `envVariantEnum` separados de `envBindings` | `EnumDefs` próprio | testes de enum e colisão | Completo |
 | Parser + checker + interpreter | novos nós em todas as fases | árvore tipada consumida por `Eval` | — | grupos Parser, TC e Interpreter | Completo |
-| Testes e samples | `TrafficLight.smartts`, `VotingBox.smartts` | execução equivalente coberta | tipos/expressões cobertos | 108 testes | Completo |
-| Terceiro milestone | — | — | SmartTS → LLTZ | 10 testes LLTZ | Completo no limite LLTZ; sem backend Michelson |
+| Testes e samples | `TrafficLight.smartts`, `VotingBox.smartts` | arquivos reais executados end-to-end | tipos/expressões cobertos | 117 testes | Completo |
+| Terceiro milestone | — | — | SmartTS → LLTZ | 13 testes LLTZ | Completo no limite LLTZ; sem backend Michelson |
 
 ## Invariantes adicionais da equipe
 
@@ -49,9 +49,9 @@ Abreviações:
 | Variante globalmente única | literal não qualificado | `nub allVariants` | `variant names shared by different enums fail` |
 | Inicial maiúscula | distinguir `EnumLiteral` de `Var` | parser + `validateVariantName` | `lowercase enum variant fails` |
 | Referência enum declarada | evitar `TEnum` órfão | `checkEnumRefs` | `undefined enum in storage fails` |
-| Nomes distintos na desestruturação | não sobrescrever binding simultâneo | `when (n1 == n2)` | coberto pela regra/checker; recomendável teste dedicado |
+| Nomes distintos na desestruturação | não sobrescrever binding simultâneo | `when (n1 == n2)` | `destructuring with the same name fails` |
 | Cases únicos | um comportamento por variante | `nub covered` | checker de match |
-| Tipo LLTZ igual nos branches | requisito de junção/`IF_LEFT` | comparação de `exprType` | coberto estruturalmente; recomendável teste negativo direto |
+| Tipo LLTZ igual nos branches | requisito de junção/`IF_LEFT` | comparação de `exprType` | `match translation rejects inconsistent branch result types` |
 | JSON enum válido | preservar invariantes na fronteira externa | `EnumRegistry` no codec | `unknown enum variant is rejected` |
 
 ## Fluxo de arquivos contra `main`
@@ -86,5 +86,5 @@ cabal test all --test-show-details=direct
 git diff main...HEAD --stat
 ```
 
-Resultado verificado: `All 108 tests passed` com GHC 9.10.3.
+Resultado verificado: `All 117 tests passed` com GHC 9.10.3.
 

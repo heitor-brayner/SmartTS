@@ -176,7 +176,7 @@ storage/field/call/div/mod; row n-ária ainda abstrata.
 
 ### Cartão E1
 
-**Pergunta:** Por que 108 testes não provam correção total?
+**Pergunta:** Por que 117 testes não provam correção total?
 
 **Repregunta:** O que a suíte efetivamente prova?
 
