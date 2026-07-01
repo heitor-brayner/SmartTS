@@ -1,12 +1,18 @@
 module SmartTS.IR.AST where
 
 data Contract a = Contract {
-  contractName :: Name,
+  contractName    :: Name,
   contractStorage :: Storage,
+  contractEnums   :: [EnumDecl],
   contractMethods :: [MethodDecl a]
 } deriving (Eq, Show)
 
 type Storage = [(Name, Type)]
+
+data EnumDecl = EnumDecl
+  { enumName     :: Name
+  , enumVariants :: [Name]
+  } deriving (Eq, Show)
 
 data MethodDecl a = MethodDecl {
   methodKind :: MethodKind,
@@ -30,6 +36,8 @@ data Type = TInt
           | TBool
           | TUnit
           | TRecord [(Name, Type)]
+          | TPair Type Type
+          | TEnum Name
   deriving (Eq, Show)
 
 type Name = String
@@ -57,6 +65,10 @@ data Expr a
   | Record  a [(Name, Expr a)]
   | Unit    a
   | Call    a Name [Expr a]
+  | PairExpr    a (Expr a) (Expr a)
+  | Fst         a (Expr a)
+  | Snd         a (Expr a)
+  | EnumLiteral a Name
   deriving (Eq, Show)
 
 -- | Extract the annotation from any expression node.
@@ -83,6 +95,10 @@ exprAnn (Gte a _ _)         = a
 exprAnn (Record a _)        = a
 exprAnn (Unit a)            = a
 exprAnn (Call a _ _)        = a
+exprAnn (PairExpr a _ _)    = a
+exprAnn (Fst a _)           = a
+exprAnn (Snd a _)           = a
+exprAnn (EnumLiteral a _)   = a
 
 type MethodBody a = Stmt a
 
@@ -102,6 +118,9 @@ data Stmt a
   | WhileStmt (Expr a) (Stmt a)                 -- (condition, body)
   | ReturnStmt (Expr a)
   | SequenceStmt [Stmt a]
+  | MatchStmt       (Expr a) [(Name, Stmt a)]
+  | VarDestructStmt Name Name Type (Expr a)
+  | ValDestructStmt Name Name Type (Expr a)
   deriving (Eq, Show)
 
 -- | Type aliases for the two phases of the compilation pipeline.
