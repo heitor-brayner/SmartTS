@@ -182,8 +182,14 @@ translateStatement env (A.MatchStmt e cases) =
             branches   = map mkBranch vs
             branchRow  = L.RowNode
               (zipWith (\v b -> L.RowLeaf (Just (L.Label v)) b) vs branches)
-            resultTy   = L.exprType (L.lamBody (head branches))
-        in L.Expr (L.Match e' branchRow) resultTy
+        in case branches of
+          [] -> error "CompileLLTZ: cannot translate match for an enum without variants"
+          firstBranch : remainingBranches ->
+            let resultTy = L.exprType (L.lamBody firstBranch)
+                sameResultType branch = L.exprType (L.lamBody branch) == resultTy
+            in if all sameResultType remainingBranches
+                 then L.Expr (L.Match e' branchRow) resultTy
+                 else error "CompileLLTZ: match branches have inconsistent result types"
     _ -> error "CompileLLTZ: MatchStmt on non-TEnum expression"
 translateStatement _ _ =
   error "CompileLLTZ: unexpected statement in translateStatement (VarDeclStmt/ValDeclStmt/Destruct must go through translateBlock)"

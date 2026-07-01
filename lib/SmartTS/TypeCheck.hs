@@ -6,6 +6,7 @@ module SmartTS.TypeCheck
 
 import Control.Monad (when, unless, zipWithM_)
 import Control.Monad.State
+import Data.Char (isUpper)
 import Data.List (nub)
 import qualified Data.Map.Strict as M
 import SmartTS.IR.AST
@@ -53,6 +54,31 @@ buildEnumMaps decls =
   , M.fromList [(v, enumName d) | d <- decls, v <- enumVariants d]
   )
 
+validateEnumDecls :: [EnumDecl] -> Either String ()
+validateEnumDecls decls = do
+  let enumNames = map enumName decls
+      allVariants = [v | d <- decls, v <- enumVariants d]
+  unless (length enumNames == length (nub enumNames)) $
+    Left "Duplicate enum type declaration."
+  mapM_ validateDecl decls
+  unless (length allVariants == length (nub allVariants)) $
+    Left "Enum variant names must be globally unique while variants are unqualified."
+  where
+    validateDecl d = do
+      let variants = enumVariants d
+      when (length variants < 2) $
+        Left $ "Enum `" ++ enumName d ++ "` must declare at least two variants."
+      unless (length variants == length (nub variants)) $
+        Left $ "Duplicate variant in enum `" ++ enumName d ++ "`."
+      mapM_ (validateVariantName (enumName d)) variants
+
+    validateVariantName eName variant =
+      case variant of
+        first : _ | isUpper first -> Right ()
+        _ -> Left $
+          "Enum variant `" ++ variant ++ "` in `" ++ eName
+            ++ "` must start with an uppercase letter."
+
 checkEnumRefs :: M.Map Name [Name] -> Type -> Either String ()
 checkEnumRefs env = go
   where
@@ -67,6 +93,7 @@ typeCheckContract :: ParsedContract -> Either String TypedContract
 typeCheckContract c = do
   checkDuplicateStorage (contractStorage c)
   mapM_ (checkDuplicateParams . methodArgs) (contractMethods c)
+  validateEnumDecls (contractEnums c)
   let (enumDefs, variantMap) = buildEnumMaps (contractEnums c)
   mapM_ (checkEnumRefs enumDefs . snd) (contractStorage c)
   mapM_ (\m -> do

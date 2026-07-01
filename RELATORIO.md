@@ -4,7 +4,7 @@
 **Disciplina:** SmartTS — Linguagem para Contratos Inteligentes Tezos  
 **Data:** 01/07/2026  
 **Branch:** `feature/pair-enum-lltz`  
-**Status:** ✅ Todos os 92 testes passam
+**Status:** ✅ Todos os 108 testes passam com GHC 9.10.3
 
 ---
 
@@ -58,7 +58,7 @@ O LLTZ IR já fornece exatamente esse construtor:
 | Match  Expr (Row LambdaBinder)
 ```
 
-`Match` é a generalização de `IfLeft` para linhas n-árias (`TOr (RowNode [...])`). Ao gerar Michelson, `Match` compila para a sequência de `IF_LEFT`/`IF_RIGHT` aninhados que o professor descreveu. Portanto, nossa implementação **aplica `IFLeft` na semântica**, mas através do construtor `Match` que o próprio professor sugeriu como ponte entre SmartTS e o LLTZ.
+`Match` é a generalização LLTZ de `IfLeft` para linhas n-árias (`TOr (RowNode [...])`). A branch produz o IR LLTZ; uma etapa posterior de lowering deve representar a row como uma árvore binária de `or` e gerar `IF_LEFT` aninhados. Michelson não possui uma instrução `IF_RIGHT`: `LEFT`/`RIGHT` constroem valores e `IF_LEFT` os elimina. Essa etapa LLTZ → Michelson não faz parte deste repositório.
 
 ### 3.2 Mapeamento notas → implementação
 
@@ -474,17 +474,19 @@ exprToJson (EnumLiteral _ variant) = String (T.pack variant)
 
 ```haskell
 -- Objeto JSON com "fst"/"snd" → PairExpr
-jsonToExprByType (TPair t1 t2) (Object obj) = do
+jsonToExprByType enumRegistry (TPair t1 t2) (Object obj) = do
   v1 <- case KM.lookup (fromStringKey "fst") obj of
     Nothing -> Left "Missing 'fst' field in pair JSON."
-    Just v  -> jsonToExprByType t1 v
+    Just v  -> jsonToExprByType enumRegistry t1 v
   v2 <- case KM.lookup (fromStringKey "snd") obj of
     Nothing -> Left "Missing 'snd' field in pair JSON."
-    Just v  -> jsonToExprByType t2 v
+    Just v  -> jsonToExprByType enumRegistry t2 v
   Right (PairExpr (TPair t1 t2) v1 v2)
 
 -- String JSON → EnumLiteral
-jsonToExprByType t@(TEnum _) (String s) = Right (EnumLiteral t (T.unpack s))
+jsonToExprByType enumRegistry t@(TEnum enumName) (String s) =
+  -- aceita apenas variantes presentes na definição nominal do enum
+  validateVariant enumRegistry enumName s >> Right (EnumLiteral t (T.unpack s))
 ```
 
 **Exemplo de storage JSON do VotingBox:**
@@ -662,7 +664,7 @@ Contract _ storage _  →  Contract _ storage _ _
 - Desestruturação `var (a, b): pair<int, bool> = p;`
 - Desestruturação `val (a, b): pair<int, bool> = p;`
 
-**Type checking de pares e enums (14 testes):**
+**Type checking de pares e enums (19 testes):**
 - Par bem-tipado ✅
 - `fst` retorna o tipo correto ✅
 - `snd` retorna o tipo correto ✅
@@ -677,19 +679,37 @@ Contract _ storage _  →  Contract _ storage _ _
 - Desestruturação `var` bem-tipada ✅
 - Desestruturação `val` bem-tipada ✅
 - Match em não-enum ❌
+- Nomes de enum duplicados ❌
+- Variantes duplicadas no mesmo enum ❌
+- Colisão global de variantes ❌
+- Enum com menos de duas variantes ❌
+- Variante iniciada por minúscula ❌
 
-**Codec JSON (5 testes incluindo o existente):**
+**Codec JSON (6 testes incluindo o existente):**
 - Par codifica para `{"fst": ..., "snd": ...}`
 - Par decodifica de objeto JSON
 - Enum codifica para string
 - Enum decodifica de string
+- Variante externa inexistente é rejeitada
 
-**Geração de código LLTZ (5 testes):**
+**Interpretador de pares e enums (5 testes):**
+- Projeção `fst` sobre par no storage
+- Desestruturação `val`
+- Dispatch correto do `match`
+- Igualdade estrutural de pares
+- Igualdade nominal de enums
+
+**Geração de código LLTZ (10 testes):**
 - `pair<int, bool>` → `TTuple (RowNode [RowLeaf Nothing TInt, RowLeaf Nothing TBool])`
 - `TEnum "Color"` → `TOr (RowNode [RowLeaf (Label "Red") TUnit, RowLeaf (Label "Green") TUnit])`
 - Par aninhado → TTuple aninhado
 - `int` → `TInt`
 - `bool` → `TBool`
+- Construção de `TupleExpr`
+- Projeção `Proj`
+- Injeção `Inj`
+- Reordenação de branches do `Match`
+- Preservação da ordem no registro de enums
 
 ---
 
@@ -879,21 +899,20 @@ LLTZ:
 ## 8. Resultado dos Testes
 
 ```
-All 92 tests passed (0.01s)
+All 108 tests passed (0.02s)
 ```
 
 | Grupo de testes | Quantidade | Status |
 |---|---|---|
-| Parser — contratos, storage, métodos, expressões, statements, erros | 51 | ✅ |
+| Parser — contratos, storage, métodos, expressões, statements, erros | 49 | ✅ |
 | Parser — novos: pares e tipos pair | 5 | ✅ |
 | Parser — novos: enums, match, desestruturação | 6 | ✅ |
 | Type Checker — testes existentes | 8 | ✅ |
-| Type Checker — novos: pares e enums | 14 | ✅ |
-| Codec JSON | 5 | ✅ |
-| Geração de código LLTZ | 5 | ✅ |
-| **Total** | **94 testes** | ✅ |
-
-> Nota: a contagem de 92 reflete o total após unificação no runner do Tasty (dois grupos de testes foram combinados).
+| Type Checker — novos: pares e enums | 19 | ✅ |
+| Codec JSON | 6 | ✅ |
+| Interpretador — pares e enums | 5 | ✅ |
+| Geração de código LLTZ | 10 | ✅ |
+| **Total** | **108 testes** | ✅ |
 
 ---
 

@@ -179,9 +179,9 @@ parseVarOrCall = do
   name <- parseName
   maybeArgs <- optional (parens (sepBy parseExpr (symbol ",")))
   return $ case maybeArgs of
-    Nothing
-      | not (null name) && isUpper (head name) -> EnumLiteral () name
-      | otherwise                               -> Var () name
+    Nothing -> case name of
+      first : _ | isUpper first -> EnumLiteral () name
+      _                         -> Var () name
     Just args -> Call () name args
 
 parseBool :: Parser ParsedExpr

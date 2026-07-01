@@ -6,7 +6,7 @@ import Test.Tasty
 import Test.Tasty.HUnit
 import SmartTS.IR.AST
 import SmartTS.Parser
-import Data.Aeson (object, (.=), toJSON, Value (..))
+import Data.Aeson (Value, object, (.=), toJSON)
 import SmartTS.Interpreter ( ContractInstance (..)
                             , contractInstanceFromStorageValue
                             , originateWithJsonArgs
@@ -15,7 +15,12 @@ import SmartTS.Interpreter ( ContractInstance (..)
                             , jsonToExprByType
                             )
 import SmartTS.TypeCheck (typeCheckContract)
-import SmartTS.CodeGen.CompileLLTZ (buildEnumDefs, translateType)
+import SmartTS.CodeGen.CompileLLTZ
+  ( buildEnumDefs
+  , translateExpression
+  , translateStatement
+  , translateType
+  )
 import qualified SmartTS.IR.LLTZ as L
 import qualified Data.Map.Strict as M
 
@@ -40,6 +45,7 @@ tests =
     , typeCheckTests
     , pairEnumTypeCheckTests
     , codecTests
+    , interpreterPairEnumTests
     , lltzTests
     ]
 
@@ -70,6 +76,20 @@ typeCheckFailure input = case parseContractFromString input of
     case typeCheckContract c of
       Left _  -> return ()
       Right _ -> assertFailure "Expected type error but checking succeeded"
+
+parseAndTypeCheck :: String -> Either String TypedContract
+parseAndTypeCheck source = do
+  parsed <- case parseContractFromString source of
+    Left err -> Left (show err)
+    Right c  -> Right c
+  typeCheckContract parsed
+
+runEntrypoint :: String -> Name -> Value -> Either String (Maybe TypedExpr)
+runEntrypoint source entryName args = do
+  contract <- parseAndTypeCheck source
+  (address, repo) <- originateWithJsonArgs M.empty contract source (object [])
+  (result, _) <- callEntrypointWithJsonArgs repo contract address entryName source args
+  Right result
 
 contractTests :: TestTree
 contractTests = testGroup "Contract Parsing"
@@ -578,6 +598,21 @@ pairEnumTypeCheckTests = testGroup "Pair and Enum Type Checking"
 
   , testCase "match on non-enum fails" $
       typeCheckFailure "contract T { storage: { x: int }; @entrypoint f(n: int): unit { match (n) { } } }"
+
+  , testCase "duplicate enum names fail" $
+      typeCheckFailure "contract T { storage: { x: int }; enum Color { Red, Green } enum Color { Blue, Yellow } @originate init(): unit { return (); } }"
+
+  , testCase "duplicate variants in one enum fail" $
+      typeCheckFailure "contract T { storage: { x: int }; enum Color { Red, Red } @originate init(): unit { return (); } }"
+
+  , testCase "variant names shared by different enums fail" $
+      typeCheckFailure "contract T { storage: { x: int }; enum Color { Red, Green } enum Status { Open, Red } @originate init(): unit { return (); } }"
+
+  , testCase "enum with fewer than two variants fails" $
+      typeCheckFailure "contract T { storage: { x: int }; enum Singleton { Only } @originate init(): unit { return (); } }"
+
+  , testCase "lowercase enum variant fails" $
+      typeCheckFailure "contract T { storage: { x: int }; enum Color { red, Green } @originate init(): unit { return (); } }"
   ]
 
 -- ---------------------------------------------------------------------------
@@ -594,7 +629,7 @@ codecTests = testGroup "Codec (JSON)"
   , testCase "pair decodes from {fst, snd} object" $
       let ty = TPair TInt TBool
           json = object ["fst" .= (3 :: Int), "snd" .= True]
-      in jsonToExprByType ty json @?=
+      in jsonToExprByType M.empty ty json @?=
            Right (PairExpr (TPair TInt TBool) (CInt TInt 3) (CBool TBool True))
 
   , testCase "enum encodes to string" $
@@ -605,7 +640,16 @@ codecTests = testGroup "Codec (JSON)"
   , testCase "enum decodes from string" $
       let ty = TEnum "Color"
           json = toJSON ("Green" :: String)
-      in jsonToExprByType ty json @?= Right (EnumLiteral (TEnum "Color") "Green")
+          enums = M.fromList [("Color", ["Red", "Green"])]
+      in jsonToExprByType enums ty json @?= Right (EnumLiteral (TEnum "Color") "Green")
+
+  , testCase "unknown enum variant is rejected during JSON decoding" $
+      let ty = TEnum "Color"
+          json = toJSON ("Purple" :: String)
+          enums = M.fromList [("Color", ["Red", "Green"])]
+      in case jsonToExprByType enums ty json of
+           Left _  -> return ()
+           Right v -> assertFailure $ "Expected invalid enum variant to fail, got: " ++ show v
 
   , testCase "persisted storage decodes against contract storage type" $
       parseSuccess
@@ -616,6 +660,34 @@ codecTests = testGroup "Codec (JSON)"
             Right (ContractInstance _ st) -> case st of
               Record _ [("n", CInt _ 1), ("b", CBool _ True)] -> return ()
               _ -> assertFailure $ "unexpected storage expr: " ++ show st
+  ]
+
+-- ---------------------------------------------------------------------------
+-- Pair and enum interpreter tests
+-- ---------------------------------------------------------------------------
+
+interpreterPairEnumTests :: TestTree
+interpreterPairEnumTests = testGroup "Pair and Enum Interpreter"
+  [ testCase "fst evaluates a stored pair" $
+      let source = "contract T { storage: { p: pair<int, bool> }; @originate init(): unit { storage.p = pair(7, true); return (); } @entrypoint first(): int { return fst(storage.p); } }"
+      in runEntrypoint source "first" (object []) @?= Right (Just (CInt TInt 7))
+
+  , testCase "val destructuring binds both pair components" $
+      let source = "contract T { storage: { x: int }; @originate init(): unit { storage.x = 0; return (); } @entrypoint sum(p: pair<int, int>): int { val (a, b): pair<int, int> = p; return a + b; } }"
+          args = object ["p" .= object ["fst" .= (4 :: Int), "snd" .= (5 :: Int)]]
+      in runEntrypoint source "sum" args @?= Right (Just (CInt TInt 9))
+
+  , testCase "match dispatches to the selected enum branch" $
+      let source = "contract T { storage: { light: Light }; enum Light { Red, Green } @originate init(): unit { storage.light = Red; return (); } @entrypoint code(): int { match (storage.light) { Red => { return 1; } Green => { return 2; } } } }"
+      in runEntrypoint source "code" (object []) @?= Right (Just (CInt TInt 1))
+
+  , testCase "pair values support structural equality" $
+      let source = "contract T { storage: { x: int }; @originate init(): unit { storage.x = 0; return (); } @entrypoint equal(): bool { return pair(1, true) == pair(1, true); } }"
+      in runEntrypoint source "equal" (object []) @?= Right (Just (CBool TBool True))
+
+  , testCase "enum values support nominal equality" $
+      let source = "contract T { storage: { light: Light }; enum Light { Red, Green } @originate init(): unit { storage.light = Red; return (); } @entrypoint equal(): bool { return Red == Green; } }"
+      in runEntrypoint source "equal" (object []) @?= Right (Just (CBool TBool False))
   ]
 
 -- ---------------------------------------------------------------------------
@@ -654,6 +726,62 @@ lltzTests = testGroup "LLTZ Code Generation"
 
   , testCase "bool type → TBool" $
       translateType M.empty TBool @?= L.TBool
+
+  , testCase "pair expression → TupleExpr" $
+      let sourceExpr = PairExpr (TPair TInt TBool) (CInt TInt 1) (CBool TBool True)
+      in translateExpression M.empty sourceExpr @?=
+           L.Expr
+             (L.TupleExpr (L.RowNode
+               [ L.RowLeaf Nothing (L.Expr (L.Const (L.CInt 1)) L.TInt)
+               , L.RowLeaf Nothing (L.Expr (L.Const (L.CBool True)) L.TBool)
+               ]))
+             (L.TTuple (L.RowNode
+               [ L.RowLeaf Nothing L.TInt
+               , L.RowLeaf Nothing L.TBool
+               ]))
+
+  , testCase "fst expression → Proj index 0" $
+      let pairTy = TPair TInt TBool
+          sourceExpr = Fst TInt (Var pairTy "p")
+      in translateExpression M.empty sourceExpr @?=
+           L.Expr
+             (L.Proj
+               (L.Expr (L.Variable (L.Var "p"))
+                 (L.TTuple (L.RowNode
+                   [L.RowLeaf Nothing L.TInt, L.RowLeaf Nothing L.TBool])))
+               (L.RowPath [0]))
+             L.TInt
+
+  , testCase "enum literal → Inj at variant position" $
+      let enums = M.fromList [("Color", ["Red", "Green"])]
+          sourceExpr = EnumLiteral (TEnum "Color") "Green"
+          unitLeaf label = L.RowLeaf (Just (L.Label label)) L.TUnit
+      in translateExpression enums sourceExpr @?=
+           L.Expr
+             (L.Inj
+               (L.RowCtxNode [unitLeaf "Red"] (unitLeaf "Green") [])
+               (L.Expr (L.Const L.CUnit) L.TUnit))
+             (L.TOr (L.RowNode [unitLeaf "Red", unitLeaf "Green"]))
+
+  , testCase "match branches are reordered to enum declaration order" $
+      let enums = M.fromList [("Color", ["Red", "Green"])]
+          subject = EnumLiteral (TEnum "Color") "Red"
+          statement = MatchStmt subject
+            [ ("Green", ReturnStmt (CInt TInt 2))
+            , ("Red", ReturnStmt (CInt TInt 1))
+            ]
+      in case L.exprDesc (translateStatement enums statement) of
+           L.Match _ (L.RowNode
+             [ L.RowLeaf (Just (L.Label "Red")) redBranch
+             , L.RowLeaf (Just (L.Label "Green")) greenBranch
+             ]) -> do
+               L.lamBody redBranch @?= L.Expr (L.Const (L.CInt 1)) L.TInt
+               L.lamBody greenBranch @?= L.Expr (L.Const (L.CInt 2)) L.TInt
+           other -> assertFailure $ "Unexpected LLTZ match: " ++ show other
+
+  , testCase "buildEnumDefs preserves declaration order" $
+      let contract = Contract "T" [] [EnumDecl "Color" ["Red", "Green"]] []
+      in buildEnumDefs contract @?= M.fromList [("Color", ["Red", "Green"])]
   ]
 
 -- ---------------------------------------------------------------------------

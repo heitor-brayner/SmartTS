@@ -65,7 +65,7 @@ originateWithJsonArgs repo c sourceText argsJson = do
     []   -> Left "Contract must have exactly one @originate method."
     [mm] -> Right mm
     _    -> Left "Contract must have exactly one @originate method."
-  params <- bindArgsByName (methodArgs m) argsJson
+  params <- bindArgsByName (enumRegistryFromContract c) (methodArgs m) argsJson
   rt <- execMethod c m params
   storageExpr <-
     case rtStorage rt of
@@ -103,7 +103,7 @@ callEntrypointWithJsonArgs repo c addr entryName sourceText argsJson = do
           ++ "."
     else do
       m      <- findEntryPointByName c entryName
-      params <- bindArgsByName (methodArgs m) argsJson
+      params <- bindArgsByName (enumRegistryFromContract c) (methodArgs m) argsJson
       (ret, rt') <- execMethodWithInitialStorage c (instanceStorage ci) m params
       newStorage <-
         case rtStorage rt' of
