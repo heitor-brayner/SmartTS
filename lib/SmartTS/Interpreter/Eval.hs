@@ -64,6 +64,25 @@ evalExpr (Lt  _ a b) = intCmp a b (<)
 evalExpr (Lte _ a b) = intCmp a b (<=)
 evalExpr (Gt  _ a b) = intCmp a b (>)
 evalExpr (Gte _ a b) = intCmp a b (>=)
+evalExpr e@(EnumLiteral _ _) = return e
+
+evalExpr (PairExpr ty e1 e2) = do
+  v1 <- evalExpr e1
+  v2 <- evalExpr e2
+  return (PairExpr ty v1 v2)
+
+evalExpr (Fst _ e) = do
+  v <- evalExpr e
+  case v of
+    PairExpr _ v1 _ -> return v1
+    _               -> interpretBug "fst applied to non-pair value after type check"
+
+evalExpr (Snd _ e) = do
+  v <- evalExpr e
+  case v of
+    PairExpr _ _ v2 -> return v2
+    _               -> interpretBug "snd applied to non-pair value after type check"
+
 evalExpr (Call _ name args) = do
   rt <- get
   m <- case M.lookup name (rtMethods rt) of
@@ -109,6 +128,30 @@ execStmt (IfStmt cond thenS elseS) = do
         Nothing -> return Nothing
         Just es -> execStmt es
     _ -> interpretBug "if condition was not bool after type check"
+execStmt (MatchStmt e cases) = do
+  v <- evalExpr e
+  case v of
+    EnumLiteral _ variant ->
+      case lookup variant cases of
+        Nothing -> interpretBug ("non-exhaustive match on `" ++ variant ++ "` after type check")
+        Just s  -> execStmt s
+    _ -> interpretBug "match applied to non-enum value after type check"
+execStmt (VarDestructStmt n1 n2 _ e) = do
+  v <- evalExpr e
+  case v of
+    PairExpr _ v1 v2 -> do
+      modify $ \rt -> rt { rtLocals =
+        M.insert n2 (Binding True v2) (M.insert n1 (Binding True v1) (rtLocals rt)) }
+      return Nothing
+    _ -> interpretBug "var destructuring on non-pair value after type check"
+execStmt (ValDestructStmt n1 n2 _ e) = do
+  v <- evalExpr e
+  case v of
+    PairExpr _ v1 v2 -> do
+      modify $ \rt -> rt { rtLocals =
+        M.insert n2 (Binding False v2) (M.insert n1 (Binding False v1) (rtLocals rt)) }
+      return Nothing
+    _ -> interpretBug "val destructuring on non-pair value after type check"
 execStmt (WhileStmt cond body) = loop
   where
     loop = do

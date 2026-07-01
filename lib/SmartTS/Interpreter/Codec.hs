@@ -4,6 +4,7 @@ import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as M
+import qualified Data.Text as T
 import Data.Scientific (floatingOrInteger)
 import SmartTS.IR.AST
 import SmartTS.Interpreter.Runtime
@@ -18,6 +19,12 @@ exprToJson (Record _ fields) =
       | (k, v) <- fields
       ]
 exprToJson (Unit _) = Null
+exprToJson (PairExpr _ e1 e2) =
+  Object $ KM.fromList
+    [ (fromStringKey "fst", exprToJson e1)
+    , (fromStringKey "snd", exprToJson e2)
+    ]
+exprToJson (EnumLiteral _ variant) = String (T.pack variant)
 exprToJson _ = Null
 
 jsonToExprByType :: Type -> Value -> Either String TypedExpr
@@ -36,6 +43,15 @@ jsonToExprByType (TRecord fieldsT) (Object obj) = do
         Just v  -> do
           ev <- jsonToExprByType ftype v
           Right (fname, ev)
+jsonToExprByType (TPair t1 t2) (Object obj) = do
+  v1 <- case KM.lookup (fromStringKey "fst") obj of
+    Nothing -> Left "Missing 'fst' field in pair JSON."
+    Just v  -> jsonToExprByType t1 v
+  v2 <- case KM.lookup (fromStringKey "snd") obj of
+    Nothing -> Left "Missing 'snd' field in pair JSON."
+    Just v  -> jsonToExprByType t2 v
+  Right (PairExpr (TPair t1 t2) v1 v2)
+jsonToExprByType t@(TEnum _) (String s) = Right (EnumLiteral t (T.unpack s))
 jsonToExprByType _ _ = Left "JSON value does not match the expected SmartTS type."
 
 jsonToExprUntyped :: Value -> Either String ParsedExpr
